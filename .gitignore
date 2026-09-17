@@ -1,5 +1,8 @@
 # dependencies
 /node_modules
+/.venv/
+__pycache__/
+*.pyc
 /.pnp
 .pnp.js
 
@@ -8,10 +11,18 @@
 
 # next.js
 /.next/
+/.next-desktop/
 /out/
 
 # production
 /build
+/dist/
+/desktop/.build/
+*.exe
+*.zip
+*.log
+*.pid
+/.idea/
 
 # misc
 .DS_Store

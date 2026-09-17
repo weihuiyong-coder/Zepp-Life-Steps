@@ -1,53 +1,55 @@
-// 使用 require 而不是 import，避免 ES 模块问题
-const zeppLifeSteps = require('./ZeppLifeSteps');
+const { randomUUID } = require('crypto');
+const { loginClient } = require('../../lib/miloce-login');
+const { updateSteps } = require('../../lib/step-client');
+const { normalizeError, errorDetails } = require('../../lib/diagnostics');
+const { requestGuard } = require('../../lib/request-guard');
 
-// 使用 module.exports 而不是 export default
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
     return res.status(405).json({ success: false, message: '方法不允许' });
   }
-
-  try {
-    const { account, password, steps } = req.body;
-
-    if (!account || !password) {
-      return res.status(400).json({ success: false, message: '账号和密码不能为空' });
-    }
-
-    // 设置默认步数
-    const targetSteps = steps || Math.floor(Math.random() * 10000) + 20000;
-    console.log('目标步数:', targetSteps);
-
-    // 登录获取token
-    console.log('开始登录流程...');
-    const { loginToken, userId } = await zeppLifeSteps.login(account, password);
-    console.log('登录成功,获取到loginToken和userId');
-
-    // 获取app token
-    console.log('开始获取appToken...');
-    const appToken = await zeppLifeSteps.getAppToken(loginToken);
-    console.log('获取appToken成功');
-
-    // 修改步数
-    console.log('开始更新步数...');
-    const result = await zeppLifeSteps.updateSteps(loginToken, appToken, targetSteps);
-    console.log('步数更新结果:', result);
-
-    // 返回结果
-    const response = {
-      success: true,
-      message: `步数修改成功: ${targetSteps}`,
-      data: result
-    };
-    console.log('返回响应:', response);
-    res.status(200).json(response);
-  } catch (error) {
-    console.error('API处理失败:', error);
-    const response = {
-      success: false,
-      message: error.message || '服务器内部错误'
-    };
-    console.log('返回错误响应:', response);
-    res.status(500).json(response);
+  const host = req.headers?.host;
+  // Next 13 forwards API traffic to a random loopback worker port, replacing Host.
+  // Compare Origin to the configured public port, not that internal worker port.
+  const publicPort = process.env.ZEPP_LOCAL_PORT || '3107';
+  const allowedOrigins = [`http://127.0.0.1:${publicPort}`, `http://localhost:${publicPort}`];
+  if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host || '') || !allowedOrigins.includes(req.headers.origin)) {
+    return res.status(403).json({ success: false, message: '请从本机网页提交请求' });
   }
-} 
+  const requestId = randomUUID();
+  res.setHeader('X-Request-Id', requestId);
+  let stage = 'access';
+  let acquired = false;
+  try {
+    const { account, password, steps } = req.body || {};
+    if (typeof account !== 'string' || !account.trim() || account.length > 254 || typeof password !== 'string' || !password || password.length > 256) {
+      return res.status(400).json({ success: false, message: '账号和密码不能为空', requestId });
+    }
+    const targetSteps = steps === undefined || steps === ''
+      ? Math.floor(Math.random() * 10000) + 20000
+      : (typeof steps === 'number' || typeof steps === 'string') ? Number(steps) : NaN;
+    if (!Number.isInteger(targetSteps) || targetSteps < 0 || targetSteps > 100000) {
+      return res.status(400).json({ success: false, message: '步数必须是 0 到 100000 的整数', requestId });
+    }
+    requestGuard.enter();
+    acquired = true;
+    const { appToken, userId } = await loginClient.login(account.trim(), password);
+    stage = 'update';
+    await updateSteps(userId, appToken, targetSteps);
+    console.info('zepp-request', { requestId, stage, success: true });
+    return res.status(200).json({ success: true, message: `Zepp 已接受 ${targetSteps} 步；微信、支付宝同步请在对应应用确认`, requestId });
+  } catch (error) {
+    const failure = normalizeError(error, stage);
+    if (stage === 'update' && (failure.upstreamStatus === 401 || failure.upstreamStatus === 403 || failure.code === 'UPDATE_REJECTED')) {
+      loginClient.invalidate(req.body.account, req.body.password);
+    }
+    if (failure.code === 'UPSTREAM_RATE_LIMIT') requestGuard.pause(failure.retryAfter, failure.retryAfterSource);
+    if (failure.retryAfter) res.setHeader('Retry-After', String(failure.retryAfter));
+    const details = errorDetails(failure);
+    console.error('zepp-request', { requestId, success: false, ...details });
+    return res.status(failure.status).json({ success: false, message: failure.message, requestId, ...details });
+  } finally {
+    if (acquired) requestGuard.leave();
+  }
+};

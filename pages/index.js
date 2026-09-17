@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { Form, Input, Button, message, Card, Typography, Space, Switch, Tooltip, Divider, Statistic, Row, Col, Modal, List, Tag, Slider, Empty, Tabs, Badge, Avatar, Progress, Alert } from 'antd';
 import { 
@@ -52,6 +52,46 @@ const Home = () => {
   const [notificationEnabled, setNotificationEnabled] = useState(true);
   const [streak, setStreak] = useState(0);
   const [showQRCode, setShowQRCode] = useState(false);
+  const [cooldown, setCooldown] = useState(null);
+  const [clock, setClock] = useState(Date.now());
+  const requestInFlight = useRef(false);
+  const cooldownUntil = useRef(0);
+  const cooldownSeconds = cooldown ? Math.max(0, Math.ceil((cooldown.until - clock) / 1000)) : 0;
+
+  const handleRateLimit = useCallback((error) => {
+    if (error.response?.status !== 429) return;
+    const seconds = Number(error.response.data?.retryAfter);
+    const next = { until: Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 900) * 1000,
+      source: error.response.data?.retryAfterSource === 'upstream' ? 'upstream' : 'local' };
+    cooldownUntil.current = next.until;
+    setCooldown(next);
+    setClock(Date.now());
+    setAutoUpdate(false);
+    localStorage.setItem('autoUpdate', 'false');
+    localStorage.setItem('zeppCooldown', JSON.stringify(next));
+  }, []);
+
+  useEffect(() => {
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem('zeppCooldown')); } catch { return; }
+    if (saved && Number.isFinite(saved.until) && saved.until > Date.now()) {
+      cooldownUntil.current = saved.until;
+      setCooldown(saved);
+      setAutoUpdate(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!cooldown) return;
+    const timer = setInterval(() => {
+      setClock(Date.now());
+      if (Date.now() >= cooldown.until) {
+        setCooldown(null);
+        localStorage.removeItem('zeppCooldown');
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
 
   // 从 localStorage 加载历史记录和主题设置
   useEffect(() => {
@@ -70,7 +110,7 @@ const Home = () => {
       setDarkMode(savedTheme === 'true');
     }
     
-    if (savedAutoUpdate) {
+    if (savedAutoUpdate && cooldownUntil.current <= Date.now()) {
       setAutoUpdate(savedAutoUpdate === 'true');
     }
     
@@ -133,10 +173,12 @@ const Home = () => {
   useEffect(() => {
     let timer;
     
-    if (autoUpdate && form.getFieldValue('account') && form.getFieldValue('password')) {
+    if (autoUpdate && !cooldown && form.getFieldValue('account') && form.getFieldValue('password')) {
       const intervalMs = autoUpdateInterval * 60 * 60 * 1000;
       
       const updateSteps = async () => {
+        if (requestInFlight.current || cooldownUntil.current > Date.now()) return;
+        requestInFlight.current = true;
         const values = {
           account: form.getFieldValue('account'),
           password: form.getFieldValue('password'),
@@ -148,7 +190,7 @@ const Home = () => {
           
           if (response.data.success) {
             if (notificationEnabled) {
-              message.success('自动更新步数成功！');
+              message.success(response.data.message || '步数已提交');
             }
             
             // 添加到历史记录
@@ -170,14 +212,16 @@ const Home = () => {
             });
           }
         } catch (error) {
+          handleRateLimit(error);
           if (notificationEnabled) {
-            message.error('自动更新失败：' + error.message);
+            message.error('自动更新失败：' + (error.response?.data?.message || error.message));
           }
+        } finally {
+          requestInFlight.current = false;
         }
       };
       
-      // 立即执行一次
-      updateSteps();
+      // Changing settings only schedules future updates; it must not submit immediately.
       
       // 设置定时器
       timer = setInterval(updateSteps, intervalMs);
@@ -188,9 +232,11 @@ const Home = () => {
         clearInterval(timer);
       }
     };
-  }, [autoUpdate, autoUpdateInterval, form, randomRange, notificationEnabled]);
+  }, [autoUpdate, autoUpdateInterval, form, randomRange, notificationEnabled, cooldown, handleRateLimit]);
 
   const onFinish = async (values) => {
+    if (requestInFlight.current || cooldownUntil.current > Date.now()) return;
+    requestInFlight.current = true;
     try {
       setLoading(true);
       setUpdateStatus('loading');
@@ -198,7 +244,7 @@ const Home = () => {
       const response = await axios.post('/api/update-steps', values);
       
       if (response.data.success) {
-        message.success('步数更新成功！');
+        message.success(response.data.message || '步数已提交');
         setUpdateStatus('success');
         
         // 添加到历史记录
@@ -223,9 +269,11 @@ const Home = () => {
         setUpdateStatus('error');
       }
     } catch (error) {
-      message.error('请求失败：' + error.message);
+      handleRateLimit(error);
+      message.error('请求失败：' + (error.response?.data?.message || error.message));
       setUpdateStatus('error');
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   };
@@ -387,11 +435,20 @@ const Home = () => {
                   </Form.Item>
                 )}
 
+                {cooldownSeconds > 0 && (
+                  <Alert type="warning" showIcon
+                    message={`提交已暂停，剩余 ${Math.ceil(cooldownSeconds / 60)} 分钟`}
+                    description={cooldown.source === 'upstream'
+                      ? '按华米返回的重试时间暂停。自动更新已关闭；倒计时结束后不会自动提交。'
+                      : '华米未提供有效重试时间，本地保护性暂停 15 分钟。这不代表华米限制会在 15 分钟后解除。自动更新已关闭。'}
+                    style={{ marginBottom: 16 }} />
+                )}
                 <Form.Item>
                   <Button 
                     type="primary" 
                     htmlType="submit" 
                     loading={loading} 
+                    disabled={cooldownSeconds > 0}
                     block
                     className="glass-button"
                     icon={updateStatus === 'success' ? <CheckCircleOutlined /> : null}
@@ -554,6 +611,7 @@ const Home = () => {
           <Form.Item label="自动更新">
             <Switch 
               checked={autoUpdate} 
+              disabled={cooldownSeconds > 0}
               onChange={setAutoUpdate}
               checkedChildren="开启" 
               unCheckedChildren="关闭" 
@@ -659,4 +717,4 @@ const Home = () => {
   );
 };
 
-export default Home; 
+export default Home;
