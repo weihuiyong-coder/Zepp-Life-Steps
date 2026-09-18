@@ -1,0 +1,29 @@
+name: Publish Android v1.0.0
+on:
+  push:
+    branches: [feature/android-apk-20260918]
+    paths: ['releases/android-v1.0.0/manifest.json']
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: publish-android-v1.0.0
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'weihuiyong-coder/Zepp-Life-Steps'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve the already verified unsigned build
+        uses: actions/download-artifact@v4
+        with:
+          name: zepp-android-build
+          path: /tmp/zepp-unsigned-build
+          github-token: ${{ github.token }}
+          run-id: 35358148351
+      - name: Restore exact delivered APK, verify hashes and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 releases/android-v1.0.0/publish.py
