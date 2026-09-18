@@ -25,104 +25,37 @@ jobs:
       REPO: weihuiyong-coder/Zepp-Life-Steps
       TAG: android-v1.0.0
       SOURCE: 929e5cb8d10ba7da30755f22b1779257b61c27e3
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Download original unsigned build
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Retrieve immutable build and archived public delivery manifest
         run: |
           set -euo pipefail
           gh api "repos/$REPO/actions/artifacts/10553380704/zip" > build.zip
+          gh api "repos/$REPO/git/blobs/7435828f275de1d0267afb32d17bb5839ee921ea" --jq .content | base64 --decode > delivery.yml
 
-      - name: Restore exactly the delivered signed APK without a private key
+      - name: Verify, restore, sign-check, publish and download-check original APK
         shell: python
         run: |
-          import base64, hashlib, io, zipfile, zlib
+          import hashlib, re, subprocess, sys, textwrap
           from pathlib import Path
-          # This public delta contains only bytes from the already signed APK.
-          # It is NOT a signing key and cannot sign any modified application.
-          # The original build artifact is required for this one-time publication.
-          delta = "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"
-          expected = "f2da1d92acb857a18623e7e2269fb9934187ab2414646d3adf54c816e35bc856"
-          archive = Path("build.zip").read_bytes()
-          if hashlib.sha256(archive).hexdigest() != "d8edd5b64bfc45ba0caac8c1d9efe77f44baeba36b9daae903e02d1636f86b13":
-              raise RuntimeError("Original build artifact checksum mismatch")
-          out = Path("dist")
-          out.mkdir(exist_ok=True)
-          with zipfile.ZipFile(io.BytesIO(archive)) as z:
-              base = z.read("ZeppSteps-1.0.0-unsigned.apk")
-              if hashlib.sha256(base).hexdigest() != "b4de82bde4871180e6117cef517e7dc50160dc87493f5dbddc00b505187e54be":
-                  raise RuntimeError("Unsigned APK checksum mismatch")
-              decoder = zlib.decompressobj(zdict=base)
-              apk = decoder.decompress(base64.b64decode(delta, validate=True)) + decoder.flush()
-              if not decoder.eof or len(apk) != 41819 or hashlib.sha256(apk).hexdigest() != expected:
-                  raise RuntimeError("Delivered APK checksum mismatch")
-              with zipfile.ZipFile(io.BytesIO(apk)) as package:
-                  if package.testzip() is not None:
-                      raise RuntimeError("APK archive CRC check failed")
-              (out / "ZeppSteps-1.0.0.apk").write_bytes(apk)
-              Path("apksigner.jar").write_bytes(z.read("apksigner.jar"))
-              report = "Zepp Steps Android 1.0.0 - verification report\n"
-              report += "Source: 929e5cb8d10ba7da30755f22b1779257b61c27e3\n"
-              report += "APK SHA256: " + expected + "\n"
-              report += "The published APK is byte-for-byte identical to the delivered signed APK.\n"
-              report += "No emulator/device or real-account test has been performed. WeChat sync is unverified.\n\n"
-              for filename in ("build-report.txt", "tests.txt", "package-info.txt", "zipalign.txt"):
-                  report += "--- " + filename + " ---\n" + z.read(filename).decode("utf-8") + "\n"
-              (out / "ZeppSteps-1.0.0-TestReport.txt").write_text(report, encoding="utf-8")
-          print("Verified original signed APK:", expected)
-
-      - name: Verify signature and prepare public documentation
-        run: |
-          set -euo pipefail
-          java -jar apksigner.jar verify --verbose --print-certs dist/ZeppSteps-1.0.0.apk | tee signature.txt
-          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' signature.txt
-          grep -F 'Signer #1 certificate SHA-256 digest: 2d2aff952dde6d43fd7a4213dbad3281f02d6e13f1259a0a1ea425a1721ccba0' signature.txt
-          cat signature.txt >> dist/ZeppSteps-1.0.0-TestReport.txt
-          cat > dist/README-Android.md <<'NOTES'
-          # Zepp步数助手 Android v1.0.0（测试版）
-
-          安卓手机独立运行，不需要电脑、Termux、Root 或自建服务器。最低支持 Android 8.0（API 26）；需要联网。
-
-          ## 下载与使用
-          下载本页面 Assets 中的 `ZeppSteps-1.0.0.apk` 并在安卓手机安装。
-          输入与电脑版相同的 Zepp Life 手机号／邮箱和密码，**不是微信密码**。
-          可先点击“验证登录”（不修改步数），再输入今天的目标总步数并确认提交。
-          日期按北京时间当天计算，输入的是目标总步数，不是追加步数。
-          需要先在官方 Zepp Life 中绑定微信运动；“Zepp 已接受”不等于微信已经同步，请在微信运动中确认。
-
-          ## 数据与安全
-          账号密码默认不保存；主动选择保存时，使用 Android Keystore + AES-256-GCM 在本机加密。
-          本次发布不包含私有签名密钥、签名密码、个人账号、登录令牌或私人维护备份。
-          本工具不是 Zepp／微信官方产品，仅用于自己的账号；不要用于竞赛、保险或奖励等依赖真实运动数据的活动。
-
-          ## 验证情况与限制
-          编译、35 项模拟检查、APK 签名与文件完整性校验通过。
-          **尚未进行安卓模拟器或实体手机运行测试，也未使用真实账号验证登录、步数提交及微信同步，因此标记为测试版。**
-          第三方接口可能变化、触发验证码或限流。反馈问题时请遮盖账号，不要提供密码或令牌。
-          详细结果见 `ZeppSteps-1.0.0-TestReport.txt`；校验值见 `SHA256SUMS.txt`。
-
-          包名：`com.weihuiyong.zeppsteps`；版本：`1.0.0`（versionCode 10000）。
-          源码提交：`929e5cb8d10ba7da30755f22b1779257b61c27e3`。
-          APK SHA-256：`f2da1d92acb857a18623e7e2269fb9934187ab2414646d3adf54c816e35bc856`。
-
-          Android 使用独立标签 `android-v1.0.0`，不覆盖 Windows 版 `v1.0.0`。本次未修改 Windows 程序或 main 分支。
-          NOTES
-          (cd dist && sha256sum ZeppSteps-1.0.0.apk ZeppSteps-1.0.0-TestReport.txt README-Android.md > SHA256SUMS.txt)
-
-      - name: Publish isolated Android prerelease and verify the uploaded APK
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to overwrite existing assets.' >&2
-            exit 1
-          fi
-          gh release create "$TAG" dist/ZeppSteps-1.0.0.apk dist/ZeppSteps-1.0.0-TestReport.txt dist/README-Android.md dist/SHA256SUMS.txt \
-            --repo "$REPO" --target "$SOURCE" --draft --prerelease --latest=false \
-            --title 'Android v1.0.0 · Zepp步数助手（测试版）' --notes-file dist/README-Android.md
-          mkdir -p downloaded
-          gh release download "$TAG" --repo "$REPO" --pattern 'ZeppSteps-1.0.0.apk' --dir downloaded
-          echo 'f2da1d92acb857a18623e7e2269fb9934187ab2414646d3adf54c816e35bc856  downloaded/ZeppSteps-1.0.0.apk' | sha256sum -c -
-          gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease --latest=false
-          gh release view "$TAG" --repo "$REPO" --json url,isDraft,isPrerelease,assets
+          # One-time publication of the existing signed package, not a new build.
+          # The archived delta contains APK bytes only; no signing private key.
+          raw = Path('delivery.yml').read_bytes()
+          def git_blob(data):
+              return hashlib.sha1(('blob ' + str(len(data)) + '\0').encode() + data).hexdigest()
+          if git_blob(raw) != '7435828f275de1d0267afb32d17bb5839ee921ea':
+              raise RuntimeError('Archived delivery manifest has changed')
+          text = raw.decode('utf-8')
+          before = 'GgICAgICAgICAgICAgICAgICMj'
+          after = 'GgICAgICAgICAgICAgICMj'
+          if text.count(before) != 1:
+              raise RuntimeError('Expected one encoding correction')
+          text = text.replace(before, after, 1)
+          if git_blob(text.encode()) != '72ef757a4fa2a5e716f27fe05fe30758caef4dbf':
+              raise RuntimeError('Corrected manifest does not match the locally tested manifest')
+          scripts = [textwrap.dedent(m.group(1)) for m in re.finditer(r'^        run: \|\n((?:          .*\n|\n)*)', text, re.M)]
+          if len(scripts) != 4:
+              raise RuntimeError('Unexpected manifest structure')
+          for index in (1, 2, 3):
+              command = [sys.executable, '-'] if index == 1 else ['bash', '-e', '-o', 'pipefail']
+              subprocess.run(command, input=scripts[index], text=True, check=True)
