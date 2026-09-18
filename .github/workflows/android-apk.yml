@@ -1,0 +1,23 @@
+name: Android APK
+on:
+  push:
+    branches: [feature/android-apk-20260918]
+    paths: ['android/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test native Android client
+        run: bash android/build.sh
+      - name: Upload unsigned package, source and verification tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: zepp-android-build
+          path: android/out/
+          retention-days: 14
+          if-no-files-found: error
